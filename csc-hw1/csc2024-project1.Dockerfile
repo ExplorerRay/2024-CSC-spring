@@ -24,7 +24,7 @@ RUN mkdir /var/run/sshd
 EXPOSE 22
 
 # Copy the entire project directory
-COPY csc2024-project1 /home/csc2024/csc2024-project1
+# COPY csc2024-project1 /home/csc2024/csc2024-project1
 
 # Set the working directory
 WORKDIR /home/csc2024/csc2024-project1
@@ -35,5 +35,5 @@ RUN chmod +x scripts/config.sh && \
 
 # Build the project
 RUN cmake -S all -B build -D CMAKE_CXX_COMPILER=/usr/bin/g++-10 && \
-    cmake --build build --config Release --target client && \
-    cmake --build build --config Release --target server
+    cmake --build build --config Release --target client -j 8 && \
+    cmake --build build --config Release --target server -j 8
