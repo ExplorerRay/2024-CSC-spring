@@ -24,7 +24,7 @@ RUN mkdir /var/run/sshd
 EXPOSE 22
 
 # Copy the entire project directory
-# COPY csc2024-project1 /home/csc2024/csc2024-project1
+COPY csc2024-project1 /home/csc2024/csc2024-project1
 
 # Set the working directory
 WORKDIR /home/csc2024/csc2024-project1
