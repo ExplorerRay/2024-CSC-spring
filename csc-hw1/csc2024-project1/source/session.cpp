@@ -19,9 +19,9 @@ Session::Session(const std::string& iface, ESPConfig&& cfg)
   checkError(sock = socket(AF_PACKET, SOCK_DGRAM, htons(ETH_P_ALL)), "Create socket failed");
   // TODO: Setup sockaddr_ll
   sockaddr_ll addr_ll{};
-  // addr_ll.sll_family =
-  // addr_ll.sll_protocol =
-  // addr_ll.sll_ifindex =
+  addr_ll.sll_family = AF_PACKET;
+  addr_ll.sll_protocol = ETH_P_IP;
+  addr_ll.sll_ifindex = 0;
   checkError(bind(sock, reinterpret_cast<sockaddr*>(&addr_ll), sizeof(sockaddr_ll)), "Bind failed");
 }
 
@@ -76,7 +76,7 @@ void Session::dissectIPv4(std::span<uint8_t> buffer) {
   auto&& hdr = *reinterpret_cast<iphdr*>(buffer.data());
   // TODO:
   // Set `recvPacket = true` if we are receiving packet from remote
-  //   state.recvPacket =
+  state.recvPacket = true;
   // Track current IP id
   //   state.ipId = ;
   // Call dissectESP(payload) if next protocol is ESP
