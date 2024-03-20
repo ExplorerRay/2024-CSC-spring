@@ -1,4 +1,4 @@
-#pragma once
+// #pragma once
 #include <linux/if_packet.h>
 
 #include <memory>
@@ -26,6 +26,8 @@ public:
   Session(const std::string& iface, ESPConfig&& cfg);
   ~Session();
   void run();
+  // uint16_t cal_ipv4_checksum(const iphdr* iphdr);
+  // uint16_t cal_tcp_checksum(const iphdr* iphdr, const tcphdr* tcphdr, const std::span<uint8_t>& payload);
 
 private:
   void dissect(ssize_t rdcnt);

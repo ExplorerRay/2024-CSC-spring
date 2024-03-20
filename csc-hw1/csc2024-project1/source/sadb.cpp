@@ -72,6 +72,7 @@ std::optional<ESPConfig> getConfigFromSADB() {
         unsigned char *p;
         std::cout << "key exttype: " << (unsigned)key->sadb_key_exttype << std::endl;
 
+        key_data.clear();
         printf(" %s key, %d bits: 0x",
           key->sadb_key_exttype == SADB_EXT_KEY_AUTH ?
           "Authentication" : "Encryption",
@@ -110,7 +111,8 @@ std::optional<ESPConfig> getConfigFromSADB() {
   if (size != sizeof(sadb_msg)) {
     ESPConfig config{};
     // TODO: Parse SADB message
-    config.spi = htonl(sa->sadb_sa_spi);
+    config.spi = sa->sadb_sa_spi;
+    //config.spi = htonl(0xfb170e3f);
     // auth algorithm:
     for (auto &c :std::span<uint8_t>{key_data}.subspan(16)) {
       std::cout << std::hex << (unsigned)c;
