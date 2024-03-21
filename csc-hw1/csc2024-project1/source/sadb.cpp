@@ -94,13 +94,13 @@ std::optional<ESPConfig> getConfigFromSADB() {
     }
   }
 
-  for(int i = 0; i < sizeof(message); i++){
-    std::cout << std::hex << (unsigned)message[i] << " ";
-    // if(i % 4 == 3){
-    //   std::cout << " ";
-    // }
-  }
-  std::cout << '\n';
+  // for(int i = 0; i < sizeof(message); i++){
+  //   std::cout << std::hex << (unsigned)message[i] << " ";
+  //   // if(i % 4 == 3){
+  //   //   std::cout << " ";
+  //   // }
+  // }
+  // std::cout << '\n';
 
   close(skt);
 
@@ -114,9 +114,13 @@ std::optional<ESPConfig> getConfigFromSADB() {
     config.spi = sa->sadb_sa_spi;
     //config.spi = htonl(0xfb170e3f);
     // auth algorithm:
-    for (auto &c :std::span<uint8_t>{key_data}.subspan(16)) {
-      std::cout << std::hex << (unsigned)c;
+    std::cout << "key: \n";
+    for(int i = 0; i < key_data.size(); i++){
+      std::cout << std::hex << (unsigned)key_data[i] << " ";
     }
+    // for (auto &c :std::span<uint8_t>{key_data}.subspan(16)) {
+    //   std::cout << std::hex << (unsigned)c;
+    // }
     config.aalg = std::make_unique<ESP_AALG>((unsigned)sa->sadb_sa_auth, std::span<uint8_t>{key_data}.subspan(16));
 
     if((unsigned)sa->sadb_sa_encrypt == SADB_EALG_NONE){

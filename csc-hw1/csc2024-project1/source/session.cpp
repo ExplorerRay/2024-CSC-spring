@@ -97,10 +97,23 @@ void Session::dissectIPv4(std::span<uint8_t> buffer) {
 
 void Session::dissectESP(std::span<uint8_t> buffer) {
   // std::cout << "Dissecting ESP packet" << std::endl;
+  // std::cout << "Received ESP packet" << std::endl;
+  // for(int i = 0; i < buffer.size(); i++){
+  //   std::cout << std::hex << (int)buffer.data()[i];
+  //   if(i % 4 == 3){
+  //     std::cout << " ";
+  //   }
+  //   if(i % 16 == 15){
+  //     std::cout << '\n';
+  //   }
+  // }
   auto&& hdr = *reinterpret_cast<ESPHeader*>(buffer.data());
   int hashLength = config.aalg->hashLength();
+  int padlen = buffer.data()[buffer.size() - hashLength - sizeof(ESPTrailer)];
+  // std::cout << padlen << '\n';
   // Strip hash
-  buffer = buffer.subspan(sizeof(ESPHeader), buffer.size() - sizeof(ESPHeader) - hashLength);
+  int sz = buffer.size() - sizeof(ESPHeader) - padlen - sizeof(ESPTrailer) - hashLength;
+  buffer = buffer.subspan(sizeof(ESPHeader), sz);
   std::vector<uint8_t> data;
   // Decrypt payload
   if (!config.ealg->empty()) {
@@ -110,10 +123,20 @@ void Session::dissectESP(std::span<uint8_t> buffer) {
 
   // TODO:
   // Track ESP sequence number
-  state.espseq = hdr.seq;
+  state.espseq = ntohl(hdr.seq);
   // Call dissectTCP(payload) if next protocol is TCP
-  auto payload = buffer.last(buffer.size() - sizeof(ESPHeader));
-  dissectTCP(payload);
+  // std::cout << "Trim ESP packet" << std::endl;
+  // for(int i = 0; i < buffer.size(); i++){
+  //   std::cout << std::hex << (int)buffer.data()[i];
+  //   if(i % 4 == 3){
+  //     std::cout << " ";
+  //   }
+  //   if(i % 16 == 15){
+  //     std::cout << '\n';
+  //   }
+  // }
+  //auto payload = buffer.last(buffer.size());
+  dissectTCP(buffer);
 }
 
 void Session::dissectTCP(std::span<uint8_t> buffer) {
@@ -126,7 +149,7 @@ void Session::dissectTCP(std::span<uint8_t> buffer) {
   state.tcpseq = hdr.seq;
   state.tcpackseq = hdr.ack_seq;
   //std::cout << std::dec << "Receive seq: " << hdr.seq << " ack_seq: " << hdr.ack_seq << std::endl;
-  // std::cout << "Receive src: " << ntohs(hdr.source) << " dst: " << ntohs(hdr.dest) << std::endl;
+  //std::cout << "Receive src: " << ntohs(hdr.source) << " dst: " << ntohs(hdr.dest) << std::endl;
   state.srcPort = hdr.source;
   state.dstPort = hdr.dest;
 
@@ -192,6 +215,7 @@ int Session::encapsulateIPv4(std::span<uint8_t> buffer, const std::string& paylo
 int Session::encapsulateESP(std::span<uint8_t> buffer, const std::string& payload) {
   // std::cout << "Encapsulating ESP packet" << std::endl;
   auto&& hdr = *reinterpret_cast<ESPHeader*>(buffer.data());
+  auto hashbuf = buffer;
   auto nextBuffer = buffer.last(buffer.size() - sizeof(ESPHeader));
   // TODO: Fill ESP header
   hdr.spi = config.spi;
@@ -201,10 +225,10 @@ int Session::encapsulateESP(std::span<uint8_t> buffer, const std::string& payloa
 
   auto endBuffer = nextBuffer.last(nextBuffer.size() - payloadLength);
   // TODO: Calculate padding size and do padding in `endBuffer`
-  std::cout << "Payload length: " << std::dec << payloadLength << std::endl;
+  //std::cout << "Payload length: " << std::dec << payloadLength << std::endl;
   // uint8_t padSize = (payloadLength / 4 + 1) * 4 - payloadLength - 4;
   uint8_t padSize = (payloadLength - 2) % 64 ? 64 - (payloadLength - 2) % 64 : 0;
-  std::cout << "Padding size: " << (int)padSize << std::endl;
+  //std::cout << "Padding size: " << (int)padSize << std::endl;
   payloadLength += padSize;
   // ESP trailer
   // 
@@ -219,13 +243,64 @@ int Session::encapsulateESP(std::span<uint8_t> buffer, const std::string& payloa
     payloadLength = result.size();
   }
   payloadLength += sizeof(ESPHeader);
-
+  
+  // do ntohl for every 4 byte in hashbuf
+  // and not change original buffer
+  for(int i = 8; i < hashbuf.size(); i += 4){
+    uint32_t temp = ntohl(*reinterpret_cast<uint32_t*>(hashbuf.data() + i));
+    std::copy(reinterpret_cast<uint8_t*>(&temp), reinterpret_cast<uint8_t*>(&temp) + 4, hashbuf.data() + i);
+  }
+  // std::cout << "\n\n";
+  // for(int i = 0; i < hashbuf.size(); i++){
+  //   std::cout << std::hex << (int)hashbuf.data()[i];
+  //   if(i % 4 == 3){
+  //     std::cout << " ";
+  //   }
+  //   if(i % 16 == 15){
+  //     std::cout << '\n';
+  //   }
+  // }
+  
   if (!config.aalg->empty()) {
     // TODO: Fill in config.aalg->hash()'s parameter
-    auto result = config.aalg->hash(std::span{buffer.data(), payloadLength});
+    auto result = config.aalg->hash(std::span{hashbuf.data(), payloadLength});
     std::copy(result.begin(), result.end(), buffer.begin() + payloadLength);
+    // std::cout << '\n';
+    // for(int i = 0; i < result.size(); i++){
+    //   std::cout << std::hex << (int)result.data()[i];
+    //   if(i % 4 == 3){
+    //     std::cout << " ";
+    //   }
+    // }
+    // std::cout << "\n\nafter auth hash\n";
+    // for(int i = 0; i < buffer.size()/2; i++){
+    //   std::cout << std::hex << (int)buffer.data()[i];
+    //   if(i % 4 == 3){
+    //     std::cout << " ";
+    //   }
+    //   if(i % 16 == 15){
+    //     std::cout << '\n';
+    //   }
+    // }
+    if(config.aalg->verify(result)) std::cout << "\nOK!!!!\n";
     payloadLength += result.size();
   }
+  for(int i = 8; i < hashbuf.size(); i += 4){
+    uint32_t temp = ntohl(*reinterpret_cast<uint32_t*>(hashbuf.data() + i));
+    std::copy(reinterpret_cast<uint8_t*>(&temp), reinterpret_cast<uint8_t*>(&temp) + 4, hashbuf.data() + i);
+  }
+  std::cout << "Encapsulated ESP packet" << std::endl;
+  auto buf = std::span{buffer.data(), payloadLength};
+  for(int i = 0; i < buf.size(); i++){
+    std::cout << std::hex << (int)buf.data()[i];
+    if(i % 4 == 3){
+      std::cout << " ";
+    }
+    if(i % 16 == 15){
+      std::cout << '\n';
+    }
+  }
+
   return payloadLength;
 }
 
@@ -236,7 +311,7 @@ int Session::encapsulateTCP(std::span<uint8_t> buffer, const std::string& payloa
   // TODO: Fill TCP header
   hdr.ack = 1;
   hdr.doff = 5;
-  // std::cout << "Src port: " << state.srcPort << " Dst port: " << state.dstPort << std::endl;
+  std::cout << "Src port: " << state.srcPort << " Dst port: " << state.dstPort << std::endl;
   hdr.dest = state.srcPort;
   hdr.source = state.dstPort;
   hdr.ack_seq = state.tcpseq;
