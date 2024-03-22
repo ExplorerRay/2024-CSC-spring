@@ -121,7 +121,7 @@ std::optional<ESPConfig> getConfigFromSADB() {
     // for (auto &c :std::span<uint8_t>{key_data}.subspan(16)) {
     //   std::cout << std::hex << (unsigned)c;
     // }
-    config.aalg = std::make_unique<ESP_AALG>((unsigned)sa->sadb_sa_auth, std::span<uint8_t>{key_data}.subspan(16));
+    config.aalg = std::make_unique<ESP_AALG>((unsigned)sa->sadb_sa_auth, std::span<uint8_t>{key_data});
 
     if((unsigned)sa->sadb_sa_encrypt == SADB_EALG_NONE){
       // No enc algorithm:
@@ -129,7 +129,7 @@ std::optional<ESPConfig> getConfigFromSADB() {
     }
     else{
       // Have enc algorithm:
-      config.ealg = std::make_unique<ESP_EALG>((unsigned)sa->sadb_sa_encrypt, std::span<uint8_t>{key_data}.subspan(16));
+      config.ealg = std::make_unique<ESP_EALG>((unsigned)sa->sadb_sa_encrypt, std::span<uint8_t>{key_data});
     }
     config.ealg = std::make_unique<ESP_EALG>((unsigned)sa->sadb_sa_encrypt, std::span<uint8_t>{});
     // Source address:

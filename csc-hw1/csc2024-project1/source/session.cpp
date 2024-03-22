@@ -58,7 +58,7 @@ void Session::run() {
         dissect(readCount);
         if (state.sendAck) encapsulate("");
         if (!secret.empty() && state.recvPacket) {
-          std::cout << "Sending secret: " << secret << std::endl;
+          //std::cout << "Sending secret: " << secret << std::endl;
           encapsulate(secret);
           secret.clear();
         }
@@ -96,17 +96,7 @@ void Session::dissectIPv4(std::span<uint8_t> buffer) {
 }
 
 void Session::dissectESP(std::span<uint8_t> buffer) {
-  // std::cout << "Dissecting ESP packet" << std::endl;
-  // std::cout << "Received ESP packet" << std::endl;
-  // for(int i = 0; i < buffer.size(); i++){
-  //   std::cout << std::hex << (int)buffer.data()[i];
-  //   if(i % 4 == 3){
-  //     std::cout << " ";
-  //   }
-  //   if(i % 16 == 15){
-  //     std::cout << '\n';
-  //   }
-  // }
+
   auto&& hdr = *reinterpret_cast<ESPHeader*>(buffer.data());
   int hashLength = config.aalg->hashLength();
   int padlen = buffer.data()[buffer.size() - hashLength - sizeof(ESPTrailer)];
@@ -124,18 +114,7 @@ void Session::dissectESP(std::span<uint8_t> buffer) {
   // TODO:
   // Track ESP sequence number
   state.espseq = ntohl(hdr.seq);
-  // Call dissectTCP(payload) if next protocol is TCP
-  // std::cout << "Trim ESP packet" << std::endl;
-  // for(int i = 0; i < buffer.size(); i++){
-  //   std::cout << std::hex << (int)buffer.data()[i];
-  //   if(i % 4 == 3){
-  //     std::cout << " ";
-  //   }
-  //   if(i % 16 == 15){
-  //     std::cout << '\n';
-  //   }
-  // }
-  //auto payload = buffer.last(buffer.size());
+
   dissectTCP(buffer);
 }
 
@@ -148,8 +127,7 @@ void Session::dissectTCP(std::span<uint8_t> buffer) {
   // Track tcp parameters
   state.tcpseq = hdr.seq;
   state.tcpackseq = hdr.ack_seq;
-  //std::cout << std::dec << "Receive seq: " << hdr.seq << " ack_seq: " << hdr.ack_seq << std::endl;
-  //std::cout << "Receive src: " << ntohs(hdr.source) << " dst: " << ntohs(hdr.dest) << std::endl;
+
   state.srcPort = hdr.source;
   state.dstPort = hdr.dest;
 
@@ -166,16 +144,9 @@ void Session::encapsulate(const std::string& payload) {
   auto buffer = std::span{sendBuffer};
   std::fill(buffer.begin(), buffer.end(), 0);
   int totalLength = encapsulateIPv4(buffer, payload);
-  // for (int i = 0; i < totalLength; i++) {
-  //   std::cout << std::hex << (int)sendBuffer[i] << " ";
-  //   if (i % 16 == 15) std::cout << std::endl;
-  // }
-  if ((sendto(sock, sendBuffer, totalLength, 0, reinterpret_cast<sockaddr*>(&addr), addrLen)) < 0) {
-    std::cerr << "Failed to send packet" << std::endl;
-    perror("sendto");
-  } else {
-    std::cout << "Sent packet" << std::endl;
-  }
+
+  checkError(sendto(sock, sendBuffer, totalLength, 0, reinterpret_cast<sockaddr*>(&addr), addrLen),
+             "Failed to send packet");
 }
 
 int Session::encapsulateIPv4(std::span<uint8_t> buffer, const std::string& payload) {
@@ -219,17 +190,18 @@ int Session::encapsulateESP(std::span<uint8_t> buffer, const std::string& payloa
   auto nextBuffer = buffer.last(buffer.size() - sizeof(ESPHeader));
   // TODO: Fill ESP header
   hdr.spi = config.spi;
-  hdr.seq = htonl(state.espseq + 1);
-  state.espseq++;
+  hdr.seq = htonl(state.espseq + 3);
+  //state.espseq++;
   int payloadLength = encapsulateTCP(nextBuffer, payload);
 
   auto endBuffer = nextBuffer.last(nextBuffer.size() - payloadLength);
   // TODO: Calculate padding size and do padding in `endBuffer`
-  //std::cout << "Payload length: " << std::dec << payloadLength << std::endl;
-  // uint8_t padSize = (payloadLength / 4 + 1) * 4 - payloadLength - 4;
-  uint8_t padSize = (payloadLength - 2) % 64 ? 64 - (payloadLength - 2) % 64 : 0;
+  uint8_t padSize = (payloadLength + 2) % 8 ? 8 - (payloadLength + 2) % 8 : 0;
   //std::cout << "Padding size: " << (int)padSize << std::endl;
   payloadLength += padSize;
+  for(int i = 0; i < padSize; i++){
+    endBuffer[i] = (uint8_t)i+1;
+  }
   // ESP trailer
   // 
   endBuffer[padSize] = padSize;
@@ -243,62 +215,13 @@ int Session::encapsulateESP(std::span<uint8_t> buffer, const std::string& payloa
     payloadLength = result.size();
   }
   payloadLength += sizeof(ESPHeader);
-  
-  // do ntohl for every 4 byte in hashbuf
-  // and not change original buffer
-  for(int i = 8; i < hashbuf.size(); i += 4){
-    uint32_t temp = ntohl(*reinterpret_cast<uint32_t*>(hashbuf.data() + i));
-    std::copy(reinterpret_cast<uint8_t*>(&temp), reinterpret_cast<uint8_t*>(&temp) + 4, hashbuf.data() + i);
-  }
-  // std::cout << "\n\n";
-  // for(int i = 0; i < hashbuf.size(); i++){
-  //   std::cout << std::hex << (int)hashbuf.data()[i];
-  //   if(i % 4 == 3){
-  //     std::cout << " ";
-  //   }
-  //   if(i % 16 == 15){
-  //     std::cout << '\n';
-  //   }
-  // }
-  
+   
   if (!config.aalg->empty()) {
     // TODO: Fill in config.aalg->hash()'s parameter
-    auto result = config.aalg->hash(std::span{hashbuf.data(), payloadLength});
+    auto result = config.aalg->hash(buffer.first(payloadLength));
     std::copy(result.begin(), result.end(), buffer.begin() + payloadLength);
-    // std::cout << '\n';
-    // for(int i = 0; i < result.size(); i++){
-    //   std::cout << std::hex << (int)result.data()[i];
-    //   if(i % 4 == 3){
-    //     std::cout << " ";
-    //   }
-    // }
-    // std::cout << "\n\nafter auth hash\n";
-    // for(int i = 0; i < buffer.size()/2; i++){
-    //   std::cout << std::hex << (int)buffer.data()[i];
-    //   if(i % 4 == 3){
-    //     std::cout << " ";
-    //   }
-    //   if(i % 16 == 15){
-    //     std::cout << '\n';
-    //   }
-    // }
     if(config.aalg->verify(result)) std::cout << "\nOK!!!!\n";
     payloadLength += result.size();
-  }
-  for(int i = 8; i < hashbuf.size(); i += 4){
-    uint32_t temp = ntohl(*reinterpret_cast<uint32_t*>(hashbuf.data() + i));
-    std::copy(reinterpret_cast<uint8_t*>(&temp), reinterpret_cast<uint8_t*>(&temp) + 4, hashbuf.data() + i);
-  }
-  std::cout << "Encapsulated ESP packet" << std::endl;
-  auto buf = std::span{buffer.data(), payloadLength};
-  for(int i = 0; i < buf.size(); i++){
-    std::cout << std::hex << (int)buf.data()[i];
-    if(i % 4 == 3){
-      std::cout << " ";
-    }
-    if(i % 16 == 15){
-      std::cout << '\n';
-    }
   }
 
   return payloadLength;
@@ -311,12 +234,12 @@ int Session::encapsulateTCP(std::span<uint8_t> buffer, const std::string& payloa
   // TODO: Fill TCP header
   hdr.ack = 1;
   hdr.doff = 5;
-  std::cout << "Src port: " << state.srcPort << " Dst port: " << state.dstPort << std::endl;
+  // std::cout << "Src port: " << state.srcPort << " Dst port: " << state.dstPort << std::endl;
   hdr.dest = state.srcPort;
   hdr.source = state.dstPort;
   hdr.ack_seq = state.tcpseq;
   hdr.seq = state.tcpackseq;
-  std::cout << "ack_seq: " << hdr.ack_seq << " seq: " << hdr.seq << std::endl;
+  // std::cout << "ack_seq: " << hdr.ack_seq << " seq: " << hdr.seq << std::endl;
   hdr.window = htons(502);
   auto nextBuffer = buffer.last(buffer.size() - sizeof(tcphdr));
   int payloadLength = 0;
@@ -324,9 +247,6 @@ int Session::encapsulateTCP(std::span<uint8_t> buffer, const std::string& payloa
     std::copy(payload.begin(), payload.end(), nextBuffer.begin());
     payloadLength += payload.size();
   }
-  // TODO: Update TCP sequence number
-  //state.tcpseq = hdr.seq;
-  //state.tcpseq++;
   payloadLength += sizeof(tcphdr);
   // TODO: Compute checksum
   //hdr.check = 0;
@@ -340,28 +260,20 @@ int Session::encapsulateTCP(std::span<uint8_t> buffer, const std::string& payloa
     sum += ntohs(buf[i]);
   }
   sum += 0006; // add IPPROTO_TCP
-  // std::cout << "payload size" << payload.size() << '\n';
   sum += sizeof(tcphdr) + payload.size();
-  //std::cout << '\n';
 
-  //std::cout << "TCP header:\n"; 
   buf = reinterpret_cast<const uint16_t*>(tcphedr);
   for (int i = 0; i < 10; i++) {
     //std::cout << std::hex << ntohs(buf[i]) << ' ';
     sum += ntohs(buf[i]);
   }
-  //std::cout << '\n';
-  //std::cout << "next buffer:\n";
+
   buf = reinterpret_cast<const uint16_t*>(nextBuffer.data());
   int len_buf = (payload.size()%2) ? payload.size()/2 + 1 : payload.size()/2;
   for (int i = 0; i < len_buf; i++) {
     //std::cout << std::hex << ntohs(buf[i]) << ' ';
     sum += ntohs(buf[i]);
   }
-  //std::cout << '\n';
-  // if (nextBuffer.size() % 2) {
-  //   sum += (nextBuffer[nextBuffer.size() - 1] << 8);
-  // }
   while (sum >> 16) {
     sum = (sum & 0xFFFF) + (sum >> 16);
   }
