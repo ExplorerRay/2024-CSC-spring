@@ -1,5 +1,5 @@
 CC = g++
-CFLAGS = -Wall -Wextra -O2
+CFLAGS = -Wall -Wextra -O2 -lpthread
 PROGS = mitm_attack
 
 all: $(PROGS)
@@ -15,3 +15,4 @@ mitm_attack: utils.o mitm_attack.cpp
 
 clean:
 	rm -f $(PROGS) *.o
+	

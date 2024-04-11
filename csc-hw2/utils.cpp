@@ -85,8 +85,8 @@ int send_arp(int fd, int ifindex, const unsigned char *src_mac, uint32_t src_ip,
 
     struct ethhdr *send_req = (struct ethhdr *) buffer;
     struct arp_header *arp_req = (struct arp_header *) (buffer + ETH2_HEADER_LEN);
-    int index;
-    ssize_t ret, length = 0;
+    //int index;
+    ssize_t ret;
 
     //Broadcast
     memset(send_req->h_dest, 0xff, MAC_LENGTH);
@@ -124,6 +124,10 @@ out:
     return err;
 }
 
+int send_arp_rply(){
+    
+}
+
 /*
  * Gets interface information by name:
  * IPv4
@@ -132,7 +136,7 @@ out:
  */
 int get_if_info(const char *ifname, uint32_t *ip, unsigned char *mac, int *ifindex)
 {
-    debug("get_if_info for %s", ifname);
+    //debug("get_if_info for %s", ifname);
     int err = -1;
     struct ifreq ifr;
     int sd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP));
@@ -153,7 +157,7 @@ int get_if_info(const char *ifname, uint32_t *ip, unsigned char *mac, int *ifind
         goto out;
     }
     *ifindex = ifr.ifr_ifindex;
-    printf("interface index is %d\n", *ifindex);
+    //printf("interface index is %d\n", *ifindex);
 
     //Get MAC address of the interface
     if (ioctl(sd, SIOCGIFHWADDR, &ifr) == -1) {
@@ -167,12 +171,12 @@ int get_if_info(const char *ifname, uint32_t *ip, unsigned char *mac, int *ifind
     if (get_if_ip4(sd, ifname, ip)) {
         goto out;
     }
-    debug("get_if_info OK");
+    //debug("get_if_info OK");
 
     err = 0;
 out:
     if (sd > 0) {
-        debug("Clean up temporary socket");
+        //debug("Clean up temporary socket");
         close(sd);
     }
     return err;
@@ -185,7 +189,7 @@ out:
  */
 int bind_arp(int ifindex, int *fd)
 {
-    debug("bind_arp: ifindex=%i", ifindex);
+    //debug("bind_arp: ifindex=%i", ifindex);
     int ret = -1;
 
     // Submit request for a raw socket descriptor.
@@ -195,7 +199,7 @@ int bind_arp(int ifindex, int *fd)
         goto out;
     }
 
-    debug("Binding to ifindex %i", ifindex);
+    //debug("Binding to ifindex %i", ifindex);
     struct sockaddr_ll sll;
     memset(&sll, 0, sizeof(struct sockaddr_ll));
     sll.sll_family = AF_PACKET;
@@ -218,14 +222,25 @@ out:
  * Reads a single ARP reply from fd.
  * Return 0 on success.
  */
-int read_arp(int fd)
+int read_arp(int fd, std::map<std::string, std::string> &arp_table)
 {
-    debug("read_arp");
+    //debug("read_arp");
+    struct timeval timeout = {0, 300};
+    if(setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout)) < 0){
+        perror("setsockopt()");
+        return -1;
+    }
+
     int ret = -1;
     unsigned char buffer[BUF_SIZE];
     ssize_t length = recvfrom(fd, buffer, BUF_SIZE, 0, NULL, NULL);
-    int index;
+    //int index;
     if (length == -1) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return -50;
+            //debug("Timeout");
+            //goto out;
+        }
         perror("recvfrom()");
         //goto out;
     }
@@ -233,25 +248,38 @@ int read_arp(int fd)
     struct arp_header *arp_resp = (struct arp_header *) (buffer + ETH2_HEADER_LEN);
     if (ntohs(rcv_resp->h_proto) != PROTO_ARP) {
         debug("Not an ARP packet");
-        goto out;
+        //goto out;
     }
     if (ntohs(arp_resp->opcode) != ARP_REPLY) {
         debug("Not an ARP reply");
-        goto out;
+        //goto out;
     }
-    debug("received ARP len=%ld", length);
+    //debug("received ARP len=%ld", length);
     struct in_addr sender_a;
     memset(&sender_a, 0, sizeof(struct in_addr));
     memcpy(&sender_a.s_addr, arp_resp->sender_ip, sizeof(uint32_t));
-    debug("Sender IP: %s", inet_ntoa(sender_a));
+    //debug("Sender IP: %s", inet_ntoa(sender_a));
+    //std::cout << inet_ntoa(sender_a) << '\t';
+    char dst_mac[18];
+    sprintf(dst_mac, "%02X:%02X:%02X:%02X:%02X:%02X",
+            arp_resp->sender_mac[0],
+            arp_resp->sender_mac[1],
+            arp_resp->sender_mac[2],
+            arp_resp->sender_mac[3],
+            arp_resp->sender_mac[4],
+            arp_resp->sender_mac[5]);
+    //std::cout << dst_mac << '\n';
 
-    debug("Sender MAC: %02X:%02X:%02X:%02X:%02X:%02X",
-          arp_resp->sender_mac[0],
-          arp_resp->sender_mac[1],
-          arp_resp->sender_mac[2],
-          arp_resp->sender_mac[3],
-          arp_resp->sender_mac[4],
-          arp_resp->sender_mac[5]);
+    char *ip = inet_ntoa(sender_a);
+    arp_table[ip] = dst_mac;
+
+    // debug("Sender MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+    //       arp_resp->sender_mac[0],
+    //       arp_resp->sender_mac[1],
+    //       arp_resp->sender_mac[2],
+    //       arp_resp->sender_mac[3],
+    //       arp_resp->sender_mac[4],
+    //       arp_resp->sender_mac[5]);
 
     ret = 0;
 
@@ -265,7 +293,7 @@ out:
  * interface <ifname> to IPv4 address <ip>.
  * Returns 0 on success.
  */
-int test_arp(const char *ifname, uint32_t ip) {
+int test_arp(const char *ifname, uint32_t ip, std::map<std::string, std::string> &arp_table) {
     int ret = -1;
     uint32_t dst = ip;
     if (dst == 0 || dst == 0xffffffff) {
@@ -295,14 +323,18 @@ int test_arp(const char *ifname, uint32_t ip) {
             goto out;
         }
     }
-
-    // while(1) {
-    //     int r = read_arp(arp_fd);
-    //     if (r == 0) {
-    //         info("Got reply, break out");
-    //         break;
-    //     }
+    // if (send_arp(arp_fd, ifindex, mac, src, dst)) {
+    //     err("Failed to send_arp");
+    //     goto out;
     // }
+
+    while(1) {
+        int r = read_arp(arp_fd, arp_table);
+        // if timeout
+        if(r == -50){
+            break;
+        }
+    }
 
     ret = 0;
 out:
