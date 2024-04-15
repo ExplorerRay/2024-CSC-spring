@@ -1,5 +1,5 @@
 CC = g++
-CFLAGS = -Wall -Wextra -O2 -lpthread
+CFLAGS = -Wall -Wextra -O2 -lpthread -lnetfilter_queue
 PROGS = mitm_attack
 
 all: $(PROGS)

