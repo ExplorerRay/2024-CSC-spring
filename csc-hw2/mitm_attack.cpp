@@ -22,6 +22,9 @@ int main (int argc, char **argv) {
   // system("sysctl net.ipv4.conf.all.secure_redirects=0 > /dev/null");
   system("iptables -F");
   system("iptables -F -t nat");
+  char cmd[100];
+  sprintf(cmd, "iptables -t nat -A POSTROUTING -o %s -j MASQUERADE", ifname.c_str());
+  system(cmd);
   system("iptables -A FORWARD -p tcp --dport 80 -j NFQUEUE --queue-num 0");
   system("echo `ip route | head -n 1 | awk '{print $3}'` > ./gate_ip");
 
