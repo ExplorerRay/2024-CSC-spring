@@ -39,6 +39,11 @@
 
 using namespace std;
 
+struct need_info {
+  const char *ifname;
+  map<string, string> arp_table;
+};
+
 // Define an struct for ARP header
 struct arp_header {
   uint16_t htype; // hardware type
@@ -52,14 +57,52 @@ struct arp_header {
   uint8_t sender_ip[IPV4_LENGTH];
   uint8_t target_mac[MAC_LENGTH];
   uint8_t target_ip[IPV4_LENGTH];
-};  
+};
 
-void analyze_packet (char * data, int len);
+struct dns_hdr {
+  uint16_t id;
+  uint16_t flags;
+  uint16_t qs_cnt;
+  uint16_t ans_cnt;
+  uint16_t authrr_cnt;
+  uint16_t addrr_cnt;
+};
+struct __attribute__((packed, aligned(2))) resp_hdr {
+  uint16_t name;
+  uint16_t type;
+  uint16_t cls; // class
+  uint32_t ttl;
+  uint16_t len;
+};
+
+struct __attribute__((packed, aligned(1))) ip_hdr {
+  uint8_t ihl:4, ver:4;
+  uint8_t tos;
+  uint16_t tlen;
+  uint16_t id;
+  uint16_t flags;
+  uint8_t ttl;
+  uint8_t proto;
+  uint16_t checksum;
+  uint32_t src_ip;
+  uint32_t dst_ip;
+};
+struct udp_hdr {
+  uint16_t src_port;
+  uint16_t dst_port;
+  uint16_t len;
+  uint16_t checksum;
+};
+
+int analyze_packet (char * data, int len, int type, struct need_info info);
+void send_dns_reply(char *payload, int len, int qlens, struct need_info info);
+void send_data_udp(char *data, int len, struct need_info info);
 //void print_packet (unsigned char *buf, uint32_t len);
-u_int32_t print_pkt (struct nfq_data *tb);
+pair<uint,uint> print_pkt (struct nfq_data *tb, int type, struct need_info info);
 int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg, struct nfq_data *nfa, void *data);
-void nfq_thread();
-// void filter_thread(const char *ifname);
+int cb_dns(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg, struct nfq_data *nfa, void *data);
+void nfq_thread(int type, struct need_info info);
+// void filter_thread(const char *ifname);s
 void str2mac(const char *txt, unsigned char *mac);
 // std::vector<unsigned char> str2mac(const char *txt, std::vector<unsigned char> mac);
 int int_ip4(struct sockaddr *addr, uint32_t *ip);
@@ -69,7 +112,7 @@ int send_arp(int fd, int ifindex, const unsigned char *src_mac, uint32_t src_ip,
 int arp_reply(int ifindex, unsigned char *src_mac, unsigned char *dst_mac, uint32_t src_ip, uint32_t dst_ip);
 void thread_reply(const char *ifname, vector<string> vctms, map<string, string> arp_table, unsigned char *gw_mac, uint32_t gw_ip);
 int get_if_info(const char *ifname, uint32_t *ip, unsigned char *mac, int *ifindex);
-int bind_all(int ifindex, int *fd);
+//int bind_all(int ifindex, int *fd);
 int bind_arp(int ifindex, int *fd);
 int read_arp(int fd, std::map<std::string, std::string> &arp_table);
 int test_arp(const char *ifname, uint32_t ip, std::map<std::string, std::string> &arp_table);
