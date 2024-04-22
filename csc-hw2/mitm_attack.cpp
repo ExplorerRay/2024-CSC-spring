@@ -2,12 +2,15 @@
 
 using namespace std;
 
-int main (int argc, char **argv) {
-  if (argc != 2) {
-    cout << "Usage: " << argv[0] << " <if_name>\n";
-    return 1;
-  }
-  string ifname = argv[1];
+int main () {
+  char tmp[20];
+  system("echo `ip route | head -n 1 | awk '{print $5}'` > ./ifname");
+  FILE *pp = fopen("./ifname", "r");
+  fscanf(pp, "%s", tmp);
+  fclose(pp);
+  system("rm ./ifname");
+  string ifname(tmp);
+  // cout << ifname << '\n';
 
   cout << "Available devices:\n";
   cout << "---------------------------------------\n";
@@ -33,6 +36,7 @@ int main (int argc, char **argv) {
   FILE *fp = fopen("./gate_ip", "r");
   fscanf(fp, "%s", gwip);
   fclose(fp);
+  system("rm ./gate_ip");
 
   uint32_t dst_ip = inet_addr(gwip);
   test_arp(ifname.c_str(), dst_ip, arp_table);
