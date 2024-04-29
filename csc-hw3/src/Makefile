@@ -1,4 +1,3 @@
-PY = python3
 PROGS = attack_server crack_attack
 
 .PHONY: clean all
@@ -6,11 +5,11 @@ PROGS = attack_server crack_attack
 all: $(PROGS)
 
 # start from @ for no echo
-crack_attack: crack.py victim.dat
+crack_attack: crack.py virus.py victim.dat
 	@cp crack.py $@
 	@chmod +x $@
 
-attack_server: server.py
+attack_server: server.py worm.py
 	@cp server.py $@
 	@chmod +x $@
 
