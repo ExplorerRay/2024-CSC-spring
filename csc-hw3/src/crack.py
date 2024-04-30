@@ -37,7 +37,7 @@ def crack_ssh(victim_ip: str, attacker_ip: str, attacker_port: int, pswds: list)
 
 def get_victim_data():
     dic = list()
-    with open('victim.dat', 'r') as f:
+    with open('/app/victim.dat', 'r') as f:
         for line in f:
             if line.strip() not in dic:
                 dic.append(line.strip())

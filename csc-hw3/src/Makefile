@@ -5,7 +5,7 @@ PROGS = attack_server crack_attack
 all: $(PROGS)
 
 # start from @ for no echo
-crack_attack: crack.py virus.py victim.dat
+crack_attack: crack.py virus.py /app/victim.dat
 	@cp crack.py $@
 	@chmod +x $@
 
