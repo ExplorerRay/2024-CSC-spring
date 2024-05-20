@@ -1,4 +1,4 @@
-PROGS = attack_server crack_attack
+PROGS = attacker_server crack_attack
 
 .PHONY: clean all
 
@@ -9,7 +9,7 @@ crack_attack: crack.py virus.py /app/victim.dat
 	@cp crack.py $@
 	@chmod +x $@
 
-attack_server: server.py worm.py
+attacker_server: server.py worm.py
 	@cp server.py $@
 	@chmod +x $@
 
