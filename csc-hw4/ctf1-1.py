@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 from pwn import *
 
 r = remote('140.113.24.241', 30170)
